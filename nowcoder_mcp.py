@@ -75,6 +75,19 @@ NOWCODER_DISCUSS_API_URL = (
 NOWCODER_DISCUSS_URL = "https://www.nowcoder.com/discuss"  # 讨论帖详情页
 REQUEST_TIMEOUT = 30  # 请求超时时间（秒）
 
+# 标签选项（用户可选）：id -> 名称
+TAG_OPTIONS = {
+    818: "面经",
+    861: "求职进度",
+    823: "内推",
+    856: "公司评价",
+}
+
+# 有效的标签 ID 列表（用于参数校验）
+VALID_TAG_IDS = list(TAG_OPTIONS.keys())
+# 有效的排序值列表（用于参数校验）
+VALID_ORDER_VALUES = ["", "create"]
+
 
 # ==================== 工具函数 ====================
 
@@ -119,21 +132,38 @@ def html_to_text(html: str) -> str:
     return html.strip()
 
 
-def search_nowcoder_api(query: str, page: int = 1) -> dict:
+def search_nowcoder_api(
+    query: str,
+    page: int = 1,
+    tag: Optional[int] = None,
+    order: str = "",
+) -> dict:
     """调用牛客网搜索 API
 
     Args:
         query: 搜索关键词
         page: 页码，从1开始
+        tag: 标签筛选 ID，可选值：818(面经)、861(求职进度)、823(内推)、856(公司评价)，None表示不筛选
+        order: 排序方式，可选值：""(默认排序)、"create"(按时间排序)
 
     Returns:
         API 响应数据
     """
+    # 构建 tag 参数
+    tag_list = []
+    if tag and tag in TAG_OPTIONS:
+        tag_list = [{"name": TAG_OPTIONS[tag], "id": tag, "count": None}]
+
     payload = {
         "type": "all",
         "query": query,
         "page": page,
-        "order": "create",
+        "tag": tag_list,
+        "order": order,
+        "gioParams": {
+            "searchFrom_var": "顶部导航栏",
+            "searchEnter_var": "主站",
+        },
     }
 
     headers = {
@@ -344,7 +374,7 @@ def get_discuss_detail_from_api(content_id: str) -> DiscussDetail:
 
 
 @mcp.tool(
-    description="牛客网搜索，根据关键词搜索牛客网中的内容（Feed动态、讨论帖等）。支持单页或多页查询。示例：'Java后端'、'秋招'、'字节跳动'",
+    description="牛客网搜索，根据关键词搜索牛客网中的内容（Feed动态、讨论帖等）。支持单页或多页查询、标签筛选和排序。示例：'Java后端'、'秋招'、'字节跳动'",
     annotations={"readOnlyHint": True},
 )
 def search(
@@ -356,21 +386,37 @@ def search(
         description="最大获取页数。默认1只获取第1页；设置为0或-1表示获取全部页面；建议不超过10页以避免请求过多",
         ge=-1,
     ),
+    tag: Optional[int] = Field(
+        default=818,
+        description="标签筛选ID。可选值：818(面经)、861(求职进度)、823(内推)、856(公司评价)。不填或null表示不筛选",
+    ),
+    order: str = Field(
+        default="create",
+        description="排序方式。可选值：''(空字符串,默认排序)、'create'(按时间排序)",
+    ),
 ) -> SearchResult:
     """搜索牛客网内容
 
-    根据关键词搜索牛客网中的内容，支持单页或多页查询。
+    根据关键词搜索牛客网中的内容，支持单页或多页查询、标签筛选和排序。
 
     Args:
         query: 搜索关键词
         max_pages: 最大获取页数，默认1，设为0或-1获取全部
+        tag: 标签筛选ID，818=面经, 861=求职进度, 823=内推, 856=公司评价
+        order: 排序方式，""=默认排序, "create"=按时间排序
 
     Returns:
         搜索结果，包含合并后的内容列表和分页信息
     """
     try:
+        # 校验参数
+        if tag is not None and tag not in VALID_TAG_IDS:
+            raise ValueError(f"无效的标签ID，可选值：{VALID_TAG_IDS}（818=面经, 861=求职进度, 823=内推, 856=公司评价）")
+        if order not in VALID_ORDER_VALUES:
+            raise ValueError(f"无效的排序方式，可选值：{VALID_ORDER_VALUES}（''=默认排序, 'create'=按时间排序）")
+
         # 先获取第一页，获取总页数信息
-        first_response = search_nowcoder_api(query, page=1)
+        first_response = search_nowcoder_api(query, page=1, tag=tag, order=order)
         if not first_response.get("success"):
             raise ValueError(f"API 请求失败: {first_response.get('msg', '未知错误')}")
 
@@ -399,7 +445,7 @@ def search(
         # 获取剩余页面
         for page in range(2, pages_to_fetch + 1):
             try:
-                response_data = search_nowcoder_api(query, page=page)
+                response_data = search_nowcoder_api(query, page=page, tag=tag, order=order)
                 if response_data.get("success"):
                     page_result = parse_search_response(response_data)
                     # 去重并添加记录
@@ -428,7 +474,7 @@ def search(
 
 
 @mcp.tool(
-    description="批量搜索多个关键词，一次性搜索多个关键词并返回结果。示例：['Java后端', '推荐算法', '字节跳动']",
+    description="批量搜索多个关键词，一次性搜索多个关键词并返回结果。支持标签筛选和排序。示例：['Java后端', '推荐算法', '字节跳动']",
     annotations={"readOnlyHint": True},
 )
 def batch_search(
@@ -440,24 +486,40 @@ def batch_search(
         description="每个关键词最大获取页数。默认1只获取第1页；设置为0或-1表示获取全部页面",
         ge=-1,
     ),
+    tag: Optional[int] = Field(
+        default=None,
+        description="标签筛选ID。可选值：818(面经)、861(求职进度)、823(内推)、856(公司评价)。不填或null表示不筛选",
+    ),
+    order: str = Field(
+        default="",
+        description="排序方式。可选值：''(空字符串,默认排序)、'create'(按时间排序)",
+    ),
 ) -> dict[str, SearchResult]:
     """批量搜索
 
-    同时搜索多个关键词，返回每个关键词的搜索结果。
+    同时搜索多个关键词，返回每个关键词的搜索结果。支持标签筛选和排序。
 
     Args:
         keywords: 关键词列表
         max_pages: 每个关键词最大获取页数
+        tag: 标签筛选ID，818=面经, 861=求职进度, 823=内推, 856=公司评价
+        order: 排序方式，""=默认排序, "create"=按时间排序
 
     Returns:
         字典，键为关键词，值为对应的搜索结果
     """
     results = {}
 
+    # 校验参数
+    if tag is not None and tag not in VALID_TAG_IDS:
+        raise ValueError(f"无效的标签ID，可选值：{VALID_TAG_IDS}（818=面经, 861=求职进度, 823=内推, 856=公司评价）")
+    if order not in VALID_ORDER_VALUES:
+        raise ValueError(f"无效的排序方式，可选值：{VALID_ORDER_VALUES}（''=默认排序, 'create'=按时间排序）")
+
     for keyword in keywords:
         try:
             # 先获取第一页
-            first_response = search_nowcoder_api(keyword, page=1)
+            first_response = search_nowcoder_api(keyword, page=1, tag=tag, order=order)
             if not first_response.get("success"):
                 results[keyword] = SearchResult(
                     current=1, size=0, total=0, total_page=0, records=[]
@@ -490,7 +552,7 @@ def batch_search(
             # 获取剩余页面
             for page in range(2, pages_to_fetch + 1):
                 try:
-                    response_data = search_nowcoder_api(keyword, page=page)
+                    response_data = search_nowcoder_api(keyword, page=page, tag=tag, order=order)
                     if response_data.get("success"):
                         page_result = parse_search_response(response_data)
                         for record in page_result.records:
