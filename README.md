@@ -90,7 +90,8 @@ uv run nowcoder_mcp.py --http
 
 推荐使用 `npx @modelcontextprotocol/inspector@0.17.5` 连接mcp进行测试功能, http模式展示如下:
 
-![mcp_inspector](.\imgs\mcp_inspector.png)
+![mcp_inspector](imgs/mcp_inspector.png)
+
 
 ## 注意事项
 
