@@ -261,19 +261,32 @@ def get_feed_detail_from_page(uuid: str) -> FeedDetail:
     title_match = re.search(r'"title":"([^"]+)"', html)
     title = title_match.group(1) if title_match else ""
 
-    # 提取完整 content - 找第一个不包含省略号的长内容
+    # 提取正文：优先解析 feed-content-text 标签中的 HTML，再回退到 JSON 片段
     content = ""
-    content_matches = re.findall(r'"content":"([^"]+)"', html)
-    for match in content_matches:
-        # 跳过摘要（包含省略号或太短）
-        if len(match) > 100 and "..." not in match:
-            content = match
-            break
-    # 处理转义字符
-    if content:
-        content = (
-            content.replace("\\n", "\n").replace("\\u002F", "/").replace("\\t", "\t")
-        )
+
+    # 直接从页面中的 feed-content-text 区块提取
+    content_match = re.search(
+        r'<div[^>]*class="[^"]*feed-content-text[^"]*"[^>]*>(.*?)</div>',
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if content_match:
+        content_html = content_match.group(1)
+        content = html_to_text(content_html)
+
+    # 若页面结构变化导致未命中，则回退到原有的 JSON 片段提取
+    if not content:
+        content_matches = re.findall(r'"content":"([^"]+)"', html)
+        for match in content_matches:
+            if len(match) > 100 and "..." not in match:
+                content = match
+                break
+        if content:
+            content = (
+                content.replace("\\n", "\n")
+                .replace("\\u002F", "/")
+                .replace("\\t", "\t")
+            )
 
     return FeedDetail(
         title=title,
